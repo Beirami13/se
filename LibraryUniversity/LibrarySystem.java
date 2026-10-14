@@ -9,6 +9,7 @@ public class LibrarySystem {
     private StaffManager staffManager;
 
     public LibrarySystem() {
+        DatabaseManager.initialize();
         this.studentManager = new StudentManager();
         this.staffManager = new StaffManager();
         this.bookManager = new BookManager(staffManager, studentManager);

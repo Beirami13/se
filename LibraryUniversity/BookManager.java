@@ -1,6 +1,6 @@
 package LibraryUniversity;
 
-import java.io.*;
+import java.sql.*;
 import java.time.LocalDate;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -9,17 +9,13 @@ public class BookManager {
     private List<Book> books = new ArrayList<>();
     private List<BorrowRequest> borrowRequests = new ArrayList<>();
 
-    private static final String BOOK_FILE = "books.txt";
-    private static final String BORROW_LOG = "borrows.txt";
-    private static final String REQUESTS_FILE = "borrow_requests.txt";
-
     private StaffManager staffManager;
     private StudentManager studentManager;
 
     public BookManager(StaffManager staffManager, StudentManager studentManager) {
         this.staffManager = staffManager;
         this.studentManager = studentManager;
-        loadBooksFromFile();
+        loadBooksFromDatabase();
         loadBorrowRequests();
     }
 
@@ -28,19 +24,17 @@ public class BookManager {
     }
 
     public int getTotalBorrows() {
-        File file = new File(BORROW_LOG);
-        if (!file.exists()) return 0;
-
-        int count = 0;
-        try (Scanner scanner = new Scanner(file)) {
-            while (scanner.hasNextLine()) {
-                scanner.nextLine();
-                count++;
+        String sql = "SELECT COUNT(*) FROM borrow_log";
+        try (Connection conn = DatabaseManager.getConnection();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            if (rs.next()) {
+                return rs.getInt(1);
             }
-        } catch (IOException e) {
+        } catch (SQLException e) {
             System.out.println("Error reading borrow log: " + e.getMessage());
         }
-        return count;
+        return 0;
     }
 
     public int getCurrentlyBorrowedCount() {
@@ -194,61 +188,65 @@ public class BookManager {
     }
 
     private void appendBorrowLog(Student student, Book book, LocalDate start, LocalDate end) {
-        try (FileWriter writer = new FileWriter(BORROW_LOG, true)) {
-            writer.write("BORROW," + student.getStudentId() + "," +
-                    student.getUsername() + "," +
-                    book.getId() + "," +
-                    book.getTitle() + "," +
-                    start + "," + end + "\n");
-        } catch (IOException e) {
+        String sql = "INSERT INTO borrow_log(type, student_id, username, book_id, book_title, date1, date2) VALUES(?,?,?,?,?,?,?)";
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, "BORROW");
+            pstmt.setString(2, student.getStudentId());
+            pstmt.setString(3, student.getUsername());
+            pstmt.setString(4, book.getId());
+            pstmt.setString(5, book.getTitle());
+            pstmt.setString(6, start.toString());
+            pstmt.setString(7, end.toString());
+            pstmt.executeUpdate();
+        } catch (SQLException e) {
             System.out.println("Error logging borrow: " + e.getMessage());
         }
     }
 
     private void saveAllBooks() {
-        try (FileWriter writer = new FileWriter(BOOK_FILE)) {
+        String sql = "INSERT INTO books(id, title, author, year, borrowed, start_date, end_date) VALUES(?,?,?,?,?,?,?) " +
+                "ON CONFLICT(id) DO UPDATE SET title = excluded.title, author = excluded.author, " +
+                "year = excluded.year, borrowed = excluded.borrowed, " +
+                "start_date = excluded.start_date, end_date = excluded.end_date";
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
             for (Book book : books) {
-                writer.write(book.getId() + "," +
-                        escapeCsv(book.getTitle()) + "," +
-                        escapeCsv(book.getAuthor()) + "," +
-                        book.getYear() + "," +
-                        book.isBorrowed() + "," +
-                        (book.getStartDate() != null ? book.getStartDate() : "") + "," +
-                        (book.getEndDate() != null ? book.getEndDate() : "") + "\n");
+                pstmt.setString(1, book.getId());
+                pstmt.setString(2, book.getTitle());
+                pstmt.setString(3, book.getAuthor());
+                pstmt.setInt(4, book.getYear());
+                pstmt.setInt(5, book.isBorrowed() ? 1 : 0);
+                pstmt.setString(6, book.getStartDate() != null ? book.getStartDate().toString() : null);
+                pstmt.setString(7, book.getEndDate() != null ? book.getEndDate().toString() : null);
+                pstmt.executeUpdate();
             }
-        } catch (IOException e) {
+        } catch (SQLException e) {
             System.out.println("Error saving books: " + e.getMessage());
         }
     }
 
-    private void loadBooksFromFile() {
+    private void loadBooksFromDatabase() {
         books.clear();
-        File file = new File(BOOK_FILE);
-        if (!file.exists()) return;
-
-        try (Scanner scanner = new Scanner(file)) {
-            while (scanner.hasNextLine()) {
-                String[] data = scanner.nextLine().split(",", -1);
-                if (data.length >= 4) {
-                    Book book = new Book(data[0].trim(),
-                            data[1].trim(),
-                            data[2].trim(),
-                            Integer.parseInt(data[3].trim()));
-
-                    if (data.length >= 5) {
-                        book.setBorrowed(Boolean.parseBoolean(data[4].trim()));
-                    }
-
-                    if (data.length >= 7) {
-                        if (!data[5].isEmpty()) book.setStartDate(LocalDate.parse(data[5].trim()));
-                        if (!data[6].isEmpty()) book.setEndDate(LocalDate.parse(data[6].trim()));
-                    }
-
-                    books.add(book);
-                }
+        String sql = "SELECT * FROM books";
+        try (Connection conn = DatabaseManager.getConnection();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            while (rs.next()) {
+                Book book = new Book(
+                        rs.getString("id"),
+                        rs.getString("title"),
+                        rs.getString("author"),
+                        rs.getInt("year"));
+                book.setBorrowed(rs.getInt("borrowed") == 1);
+                String startDate = rs.getString("start_date");
+                if (startDate != null) book.setStartDate(LocalDate.parse(startDate));
+                String endDate = rs.getString("end_date");
+                if (endDate != null) book.setEndDate(LocalDate.parse(endDate));
+                books.add(book);
             }
-        } catch (IOException e) {
-            System.out.println("Error reading books file: " + e.getMessage());
+        } catch (SQLException e) {
+            System.out.println("Error reading books: " + e.getMessage());
         }
     }
 
@@ -343,11 +341,6 @@ public class BookManager {
         }
     }
 
-    private String escapeCsv(String value) {
-        if (value == null) return "";
-        return value.replace(",", " ");
-    }
-
     public void submitBorrowRequest(Student student, String bookId, LocalDate startDate, LocalDate endDate) {
         String requestId = "REQ_" + System.currentTimeMillis();
         BorrowRequest request = new BorrowRequest(requestId, student.getStudentId(), bookId, startDate, endDate);
@@ -357,36 +350,38 @@ public class BookManager {
     }
 
     private void saveBorrowRequest(BorrowRequest request) {
-        try (FileWriter writer = new FileWriter(REQUESTS_FILE, true)) {
-            writer.write(request.getRequestId() + "," +
-                    request.getStudentId() + "," +
-                    request.getBookId() + "," +
-                    request.getStartDate() + "," +
-                    request.getEndDate() + "," +
-                    request.getStatus() + "\n");
-        } catch (IOException e) {
+        String sql = "INSERT INTO borrow_requests(request_id, student_id, book_id, start_date, end_date, status) VALUES(?,?,?,?,?,?)";
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, request.getRequestId());
+            pstmt.setString(2, request.getStudentId());
+            pstmt.setString(3, request.getBookId());
+            pstmt.setString(4, request.getStartDate().toString());
+            pstmt.setString(5, request.getEndDate().toString());
+            pstmt.setString(6, request.getStatus());
+            pstmt.executeUpdate();
+        } catch (SQLException e) {
             System.out.println("Error saving borrow request: " + e.getMessage());
         }
     }
 
     public void loadBorrowRequests() {
         borrowRequests.clear();
-        File file = new File(REQUESTS_FILE);
-        if (!file.exists()) return;
-
-        try (Scanner scanner = new Scanner(file)) {
-            while (scanner.hasNextLine()) {
-                String[] data = scanner.nextLine().split(",", -1);
-                if (data.length >= 6) {
-                    BorrowRequest request = new BorrowRequest(
-                            data[0].trim(), data[1].trim(), data[2].trim(),
-                            LocalDate.parse(data[3].trim()), LocalDate.parse(data[4].trim())
-                    );
-                    request.setStatus(data[5].trim());
-                    borrowRequests.add(request);
-                }
+        String sql = "SELECT * FROM borrow_requests";
+        try (Connection conn = DatabaseManager.getConnection();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            while (rs.next()) {
+                BorrowRequest request = new BorrowRequest(
+                        rs.getString("request_id"),
+                        rs.getString("student_id"),
+                        rs.getString("book_id"),
+                        LocalDate.parse(rs.getString("start_date")),
+                        LocalDate.parse(rs.getString("end_date")));
+                request.setStatus(rs.getString("status"));
+                borrowRequests.add(request);
             }
-        } catch (IOException e) {
+        } catch (SQLException e) {
             System.out.println("Error reading borrow requests: " + e.getMessage());
         }
     }
@@ -451,16 +446,22 @@ public class BookManager {
     }
 
     private void saveAllBorrowRequests() {
-        try (FileWriter writer = new FileWriter(REQUESTS_FILE)) {
+        String sql = "INSERT INTO borrow_requests(request_id, student_id, book_id, start_date, end_date, status) VALUES(?,?,?,?,?,?) " +
+                "ON CONFLICT(request_id) DO UPDATE SET student_id = excluded.student_id, " +
+                "book_id = excluded.book_id, start_date = excluded.start_date, " +
+                "end_date = excluded.end_date, status = excluded.status";
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
             for (BorrowRequest request : borrowRequests) {
-                writer.write(request.getRequestId() + "," +
-                        request.getStudentId() + "," +
-                        request.getBookId() + "," +
-                        request.getStartDate() + "," +
-                        request.getEndDate() + "," +
-                        request.getStatus() + "\n");
+                pstmt.setString(1, request.getRequestId());
+                pstmt.setString(2, request.getStudentId());
+                pstmt.setString(3, request.getBookId());
+                pstmt.setString(4, request.getStartDate().toString());
+                pstmt.setString(5, request.getEndDate().toString());
+                pstmt.setString(6, request.getStatus());
+                pstmt.executeUpdate();
             }
-        } catch (IOException e) {
+        } catch (SQLException e) {
             System.out.println("Error saving borrow requests: " + e.getMessage());
         }
     }
@@ -684,14 +685,18 @@ public class BookManager {
     }
 
     private void appendReturnLog(Student student, Book book, LocalDate returnDate, long daysLate) {
-        try (FileWriter writer = new FileWriter(BORROW_LOG, true)) {
-            writer.write("RETURN," + student.getStudentId() + "," +
-                    student.getUsername() + "," +
-                    book.getId() + "," +
-                    book.getTitle() + "," +
-                    returnDate + "," +
-                    daysLate + "\n");
-        } catch (IOException e) {
+        String sql = "INSERT INTO borrow_log(type, student_id, username, book_id, book_title, date1, date2) VALUES(?,?,?,?,?,?,?)";
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, "RETURN");
+            pstmt.setString(2, student.getStudentId());
+            pstmt.setString(3, student.getUsername());
+            pstmt.setString(4, book.getId());
+            pstmt.setString(5, book.getTitle());
+            pstmt.setString(6, returnDate.toString());
+            pstmt.setString(7, String.valueOf(daysLate));
+            pstmt.executeUpdate();
+        } catch (SQLException e) {
             System.out.println("Error logging return: " + e.getMessage());
         }
     }

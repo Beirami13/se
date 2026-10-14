@@ -1,16 +1,14 @@
 package LibraryUniversity;
 
-import java.io.*;
+import java.sql.*;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Scanner;
 
 public class StudentManager {
     private List<Student> students = new ArrayList<>();
-    private static final String STUDENT_FILE = "students.txt";
 
     public StudentManager() {
-        loadStudentsFromFile();
+        loadStudentsFromDatabase();
     }
 
     public void registerStudent(String name, String studentId, String username, String password) {
@@ -39,43 +37,37 @@ public class StudentManager {
     }
 
     private void saveStudent(Student student) {
-        try (FileWriter writer = new FileWriter(STUDENT_FILE, true)) {
-            writer.write(escapeCsv(student.getName()) + "," +
-                    escapeCsv(student.getStudentId()) + "," +
-                    escapeCsv(student.getUsername()) + "," +
-                    escapeCsv(student.getPassword()) + "," +
-                    student.isActive() + "\n");
-        } catch (IOException e) {
+        String sql = "INSERT INTO students(student_id, name, username, password, active) VALUES(?,?,?,?,?)";
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, student.getStudentId());
+            pstmt.setString(2, student.getName());
+            pstmt.setString(3, student.getUsername());
+            pstmt.setString(4, student.getPassword());
+            pstmt.setInt(5, student.isActive() ? 1 : 0);
+            pstmt.executeUpdate();
+        } catch (SQLException e) {
             System.out.println("Error saving student: " + e.getMessage());
         }
     }
 
-    private void loadStudentsFromFile() {
+    private void loadStudentsFromDatabase() {
         students.clear();
-        File file = new File(STUDENT_FILE);
-        if (!file.exists()) return;
-
-        try (Scanner scanner = new Scanner(file)) {
-            while (scanner.hasNextLine()) {
-                String line = scanner.nextLine();
-                String[] parts = line.split(",", -1);
-                if (parts.length >= 4) {
-                    Student student = new Student(
-                            parts[0].trim(),
-                            parts[1].trim(),
-                            parts[2].trim(),
-                            parts[3].trim()
-                    );
-
-                    if (parts.length >= 5) {
-                        student.setActive(Boolean.parseBoolean(parts[4].trim()));
-                    }
-
-                    students.add(student);
-                }
+        String sql = "SELECT * FROM students";
+        try (Connection conn = DatabaseManager.getConnection();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            while (rs.next()) {
+                Student student = new Student(
+                        rs.getString("name"),
+                        rs.getString("student_id"),
+                        rs.getString("username"),
+                        rs.getString("password"));
+                student.setActive(rs.getInt("active") == 1);
+                students.add(student);
             }
-        } catch (IOException e) {
-            System.out.println("Error reading students file: " + e.getMessage());
+        } catch (SQLException e) {
+            System.out.println("Error reading students: " + e.getMessage());
         }
     }
 
@@ -89,9 +81,23 @@ public class StudentManager {
         return null;
     }
 
-    private String escapeCsv(String value) {
-        if (value == null) return "";
-        return value.replace(",", " ");
+    private void saveAllStudents() {
+        String sql = "INSERT INTO students(student_id, name, username, password, active) VALUES(?,?,?,?,?) " +
+                "ON CONFLICT(student_id) DO UPDATE SET name = excluded.name, " +
+                "username = excluded.username, password = excluded.password, active = excluded.active";
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            for (Student student : students) {
+                pstmt.setString(1, student.getStudentId());
+                pstmt.setString(2, student.getName());
+                pstmt.setString(3, student.getUsername());
+                pstmt.setString(4, student.getPassword());
+                pstmt.setInt(5, student.isActive() ? 1 : 0);
+                pstmt.executeUpdate();
+            }
+        } catch (SQLException e) {
+            System.out.println("Error saving students: " + e.getMessage());
+        }
     }
 
     public void updateStudent(Student student, String newName, String newPassword) {
@@ -106,19 +112,6 @@ public class StudentManager {
                 saveAllStudents();
                 break;
             }
-        }
-    }
-
-    private void saveAllStudents() {
-        try (FileWriter writer = new FileWriter(STUDENT_FILE)) {
-            for (Student student : students) {
-                writer.write(escapeCsv(student.getName()) + "," +
-                        escapeCsv(student.getStudentId()) + "," +
-                        escapeCsv(student.getUsername()) + "," +
-                        escapeCsv(student.getPassword()) + "\n");
-            }
-        } catch (IOException e) {
-            System.out.println("Error saving students: " + e.getMessage());
         }
     }
 

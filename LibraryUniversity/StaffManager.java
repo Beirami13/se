@@ -1,16 +1,14 @@
 package LibraryUniversity;
 
-import java.io.*;
+import java.sql.*;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Scanner;
 
 public class StaffManager {
     private List<Staff> staffList = new ArrayList<>();
-    private static final String STAFF_FILE = "staff.txt";
 
     public StaffManager() {
-        loadStaffFromFile();
+        loadStaffFromDatabase();
         if (staffList.isEmpty()) {
             loadDefaultStaff();
             saveAllStaff();
@@ -51,33 +49,39 @@ public class StaffManager {
         System.out.println("Password changed successfully!");
     }
 
-    private void loadStaffFromFile() {
+    private void loadStaffFromDatabase() {
         staffList.clear();
-        File file = new File(STAFF_FILE);
-        if (!file.exists()) return;
-
-        try (Scanner scanner = new Scanner(file)) {
-            while (scanner.hasNextLine()) {
-                String[] data = scanner.nextLine().split(",");
-                if (data.length == 4) {
-                    Staff staff = new Staff(data[0], data[1], data[2], data[3]);
-                    staffList.add(staff);
-                }
+        String sql = "SELECT * FROM staff";
+        try (Connection conn = DatabaseManager.getConnection();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            while (rs.next()) {
+                Staff staff = new Staff(
+                        rs.getString("name"),
+                        rs.getString("staff_id"),
+                        rs.getString("username"),
+                        rs.getString("password"));
+                staffList.add(staff);
             }
-        } catch (IOException e) {
-            System.out.println("Error reading staff file: " + e.getMessage());
+        } catch (SQLException e) {
+            System.out.println("Error reading staff: " + e.getMessage());
         }
     }
 
     private void saveAllStaff() {
-        try (FileWriter writer = new FileWriter(STAFF_FILE)) {
+        String sql = "INSERT INTO staff(staff_id, name, username, password) VALUES(?,?,?,?) " +
+                "ON CONFLICT(staff_id) DO UPDATE SET name = excluded.name, " +
+                "username = excluded.username, password = excluded.password";
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
             for (Staff staff : staffList) {
-                writer.write(staff.getName() + "," +
-                        staff.getStaffId() + "," +
-                        staff.getUsername() + "," +
-                        staff.getPassword() + "\n");
+                pstmt.setString(1, staff.getStaffId());
+                pstmt.setString(2, staff.getName());
+                pstmt.setString(3, staff.getUsername());
+                pstmt.setString(4, staff.getPassword());
+                pstmt.executeUpdate();
             }
-        } catch (IOException e) {
+        } catch (SQLException e) {
             System.out.println("Error saving staff: " + e.getMessage());
         }
     }
